@@ -1,0 +1,44 @@
+{
+  "name": "wayback-screenshot",
+  "version": "1.0.0",
+  "description": "A tool to capture screenshots from the Wayback Machine for a given date range",
+  "main": "dist/index.js",
+  "type": "module",
+  "bin": {
+    "wayback-screenshot": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "wayback-machine",
+    "screenshot",
+    "archive",
+    "web-archive",
+    "puppeteer"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^11.1.0",
+    "node-fetch": "^3.3.2",
+    "puppeteer": "^21.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/wayback-screenshot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/wayback-screenshot/issues"
+  },
+  "homepage": "https://github.com/yourusername/wayback-screenshot#readme"
+}
