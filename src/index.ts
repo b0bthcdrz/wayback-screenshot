@@ -5,11 +5,21 @@ import fs from 'fs';
 import puppeteer from 'puppeteer';
 import path from 'path';
 import os from 'os';
-import { program } from 'commander';
+import { Command } from 'commander';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+interface ScreenshotOptions {
+  outputDir: string;
+  pageLoadTimeout: number;
+  imageLoadTimeout: number;
+  maxRetries: number;
+  initialRetryDelay: number;
+  requestDelay: number;
+  concurrentScreenshots: number;
+}
 
 // --- CONFIG ---
 const TARGET_URL = 'https://interpals.net';
@@ -24,31 +34,46 @@ const INITIAL_RETRY_DELAY = 10000; // Initial delay between retries (10 seconds)
 const REQUEST_DELAY = 5000; // Delay between requests (5 seconds)
 
 // Helper function to delay execution
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
 // Helper function for exponential backoff
-const getRetryDelay = (attempt) => INITIAL_RETRY_DELAY * Math.pow(2, attempt - 1);
+const getRetryDelay = (attempt: number, initialDelay: number): number => initialDelay * Math.pow(2, attempt - 1);
 
-async function getSnapshots(url, from, to) {
+async function getSnapshots(url: string, from: string, to: string): Promise<[string, string][]> {
   const cdxUrl = `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(
     url
   )}&from=${from}&to=${to}&output=json&fl=timestamp,original&filter=statuscode:200`;
   console.log(`[CDX] Fetching snapshots: ${cdxUrl}`);
   const res = await fetch(cdxUrl);
   if (!res.ok) throw new Error(`[CDX] Fetch error: ${res.statusText}`);
-  const data = await res.json();
+  const data = await res.json() as [string, string][];
   console.log(`[CDX] Found ${data.length - 1} snapshots.`);
   return data.slice(1); // Skip header row
 }
 
-async function takeScreenshot(url, timestamp, idx, total) {
+async function takeScreenshot(
+  url: string,
+  timestamp: string,
+  idx: number,
+  total: number,
+  options: ScreenshotOptions
+): Promise<void> {
+  const {
+    outputDir,
+    pageLoadTimeout,
+    imageLoadTimeout,
+    maxRetries,
+    initialRetryDelay,
+    requestDelay
+  } = options;
+
   console.log(`\n[${idx + 1}/${total}] Starting screenshot process for ${timestamp}`);
   
-  if (!fs.existsSync(SCREENSHOT_DIR)) {
-    console.log(`  📁 Creating screenshots directory: ${SCREENSHOT_DIR}`);
-    fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
+  if (!fs.existsSync(outputDir)) {
+    console.log(`  📁 Creating screenshots directory: ${outputDir}`);
+    fs.mkdirSync(outputDir, { recursive: true });
   }
-  const filename = path.join(SCREENSHOT_DIR, `${timestamp}.png`);
+  const filename = path.join(outputDir, `${timestamp}.png`);
   
   // Skip if file already exists
   if (fs.existsSync(filename)) {
@@ -57,8 +82,8 @@ async function takeScreenshot(url, timestamp, idx, total) {
   }
 
   let retries = 0;
-  while (retries < MAX_RETRIES) {
-    console.log(`  🚀 Launching browser (attempt ${retries + 1}/${MAX_RETRIES})...`);
+  while (retries < maxRetries) {
+    console.log(`  🚀 Launching browser (attempt ${retries + 1}/${maxRetries})...`);
     const browser = await puppeteer.launch({ 
       headless: 'new',
       args: [
@@ -112,20 +137,20 @@ async function takeScreenshot(url, timestamp, idx, total) {
         }
       });
 
-      console.log(`  ⏳ Waiting ${REQUEST_DELAY/1000} seconds before request...`);
-      await delay(REQUEST_DELAY);
+      console.log(`  ⏳ Waiting ${requestDelay/1000} seconds before request...`);
+      await delay(requestDelay);
 
       console.log('  🌐 Loading page (first attempt with networkidle0)...');
       try {
         await page.goto(archiveUrl, { 
           waitUntil: 'networkidle0', 
-          timeout: PAGE_LOAD_TIMEOUT 
+          timeout: pageLoadTimeout 
         });
       } catch (e) {
         console.log('  ⚠️ First load attempt failed, trying with domcontentloaded...');
         await page.goto(archiveUrl, { 
           waitUntil: 'domcontentloaded', 
-          timeout: PAGE_LOAD_TIMEOUT 
+          timeout: pageLoadTimeout 
         });
       }
 
@@ -156,16 +181,16 @@ async function takeScreenshot(url, timestamp, idx, total) {
         page.evaluate(() => {
           return Promise.all(
             Array.from(document.images)
-              .map(img => new Promise(resolve => {
+              .map(img => new Promise<void>(resolve => {
                 if (img.complete) {
                   resolve();
                 } else {
-                  img.onload = img.onerror = resolve;
+                  img.onload = img.onerror = () => resolve();
                 }
               }))
           );
         }),
-        new Promise(resolve => setTimeout(resolve, IMAGE_LOAD_TIMEOUT))
+        new Promise<void>(resolve => setTimeout(resolve, imageLoadTimeout))
       ]);
 
       console.log('  🧹 Removing toolbar...');
@@ -176,11 +201,17 @@ async function takeScreenshot(url, timestamp, idx, total) {
           let node = toolbarStart.nextSibling;
           while (node && node !== toolbarEnd) {
             const nextNode = node.nextSibling;
-            node.remove();
+            if (node.parentNode) {
+              node.parentNode.removeChild(node);
+            }
             node = nextNode;
           }
-          toolbarStart.remove();
-          toolbarEnd.remove();
+          if (toolbarStart.parentNode) {
+            toolbarStart.parentNode.removeChild(toolbarStart);
+          }
+          if (toolbarEnd.parentNode) {
+            toolbarEnd.parentNode.removeChild(toolbarEnd);
+          }
         }
       });
 
@@ -190,34 +221,44 @@ async function takeScreenshot(url, timestamp, idx, total) {
       await browser.close();
       return; // Success, exit the retry loop
     } catch (e) {
-      console.error(`  ❌ Error (attempt ${retries + 1}/${MAX_RETRIES}):`, e.message);
+      console.error(`  ❌ Error (attempt ${retries + 1}/${maxRetries}):`, e instanceof Error ? e.message : String(e));
       await browser.close();
       retries++;
-      if (retries < MAX_RETRIES) {
-        const retryDelay = getRetryDelay(retries);
+      if (retries < maxRetries) {
+        const retryDelay = getRetryDelay(retries, initialRetryDelay);
         console.log(`  ⏳ Retrying in ${retryDelay/1000} seconds...`);
         await delay(retryDelay);
       }
     }
   }
-  console.error(`  ❌ Failed after ${MAX_RETRIES} attempts`);
+  console.error(`  ❌ Failed after ${maxRetries} attempts`);
 }
 
-async function processBatch(snapshots, startIdx, batchSize) {
+async function processBatch(
+  snapshots: [string, string][],
+  startIdx: number,
+  batchSize: number,
+  options: ScreenshotOptions
+): Promise<void> {
   console.log(`\n🔄 Processing batch starting at index ${startIdx}`);
   const batch = snapshots.slice(startIdx, startIdx + batchSize);
   await Promise.all(batch.map(([timestamp, originalUrl], idx) => 
-    takeScreenshot(originalUrl, timestamp, startIdx + idx, snapshots.length)
+    takeScreenshot(originalUrl, timestamp, startIdx + idx, snapshots.length, options)
   ));
 }
 
-async function main() {
+async function captureWaybackScreenshots(
+  url: string,
+  startDate: string,
+  endDate: string,
+  options: ScreenshotOptions
+): Promise<void> {
   console.log('🚀 Starting Wayback Machine screenshot capture');
-  console.log(`📅 Date range: ${FROM_DATE} to ${TO_DATE}`);
-  console.log(`🎯 Target URL: ${TARGET_URL}`);
+  console.log(`📅 Date range: ${startDate} to ${endDate}`);
+  console.log(`🎯 Target URL: ${url}`);
   
-  const snapshots = await getSnapshots(TARGET_URL, FROM_DATE, TO_DATE);
-  const monthlySnapshots = {};
+  const snapshots = await getSnapshots(url, startDate, endDate);
+  const monthlySnapshots: Record<string, [string, string]> = {};
   snapshots.forEach(([timestamp, originalUrl]) => {
     const month = timestamp.substring(0, 6); // YYYYMM
     if (!monthlySnapshots[month]) {
@@ -228,52 +269,48 @@ async function main() {
   console.log(`📊 Found ${monthlySnapshotsList.length} unique months to capture`);
   
   // Process snapshots in batches
-  for (let i = 0; i < monthlySnapshotsList.length; i += CONCURRENT_SCREENSHOTS) {
-    await processBatch(monthlySnapshotsList, i, CONCURRENT_SCREENSHOTS);
+  for (let i = 0; i < monthlySnapshotsList.length; i += options.concurrentScreenshots) {
+    await processBatch(monthlySnapshotsList, i, options.concurrentScreenshots, options);
   }
   
   console.log('\n✨ Screenshot capture complete!');
 }
 
 // Add command-line argument parsing
+const program = new Command();
+
 program
   .name('wayback-screenshot')
   .description('Capture screenshots from the Wayback Machine for a given date range')
   .argument('<url>', 'URL to capture')
   .argument('<startDate>', 'Start date (YYYY-MM-DD)')
   .argument('<endDate>', 'End date (YYYY-MM-DD)')
-  .option('-o, --output <directory>', 'Output directory', './screenshots')
+  .option('-o, --output <directory>', 'Output directory', path.join(os.homedir(), 'wayback-screenshot-result'))
   .option('-i, --interval <months>', 'Interval between captures in months', '1')
-  .option('-t, --timeout <ms>', 'Timeout for page load in milliseconds', '30000')
+  .option('-t, --timeout <ms>', 'Timeout for page load in milliseconds', '60000')
   .option('-r, --retries <count>', 'Number of retries for failed captures', '3')
-  .option('-d, --delay <ms>', 'Delay between retries in milliseconds', '5000')
-  .parse();
+  .option('-d, --delay <ms>', 'Delay between retries in milliseconds', '10000')
+  .option('-c, --concurrent <count>', 'Number of concurrent screenshots', '1')
+  .action(async (url: string, startDate: string, endDate: string, options: Record<string, string>) => {
+    try {
+      const formattedStartDate = startDate.replace(/-/g, '');
+      const formattedEndDate = endDate.replace(/-/g, '');
+      
+      const screenshotOptions: ScreenshotOptions = {
+        outputDir: options.output,
+        pageLoadTimeout: parseInt(options.timeout),
+        imageLoadTimeout: 30000,
+        maxRetries: parseInt(options.retries),
+        initialRetryDelay: parseInt(options.delay),
+        requestDelay: 5000,
+        concurrentScreenshots: parseInt(options.concurrent)
+      };
 
-const options = program.opts();
+      await captureWaybackScreenshots(url, formattedStartDate, formattedEndDate, screenshotOptions);
+    } catch (error) {
+      console.error('Error:', error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+  });
 
-// Convert command line arguments to the expected format
-const url = program.args[0];
-const startDate = new Date(program.args[1]);
-const endDate = new Date(program.args[2]);
-const outputDir = options.output;
-const intervalMonths = parseInt(options.interval);
-const timeout = parseInt(options.timeout);
-const maxRetries = parseInt(options.retries);
-const retryDelay = parseInt(options.delay);
-
-// Create output directory if it doesn't exist
-if (!fs.existsSync(outputDir)) {
-  fs.mkdirSync(outputDir, { recursive: true });
-}
-
-// Run the main function with the parsed arguments
-captureWaybackScreenshots(
-  url,
-  startDate,
-  endDate,
-  outputDir,
-  intervalMonths,
-  timeout,
-  maxRetries,
-  retryDelay
-).catch(console.error);
+program.parse();

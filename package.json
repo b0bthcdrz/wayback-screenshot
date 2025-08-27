@@ -19,7 +19,7 @@
     "web-archive",
     "puppeteer"
   ],
-  "author": "",
+  "author": "Praditya Bagus + Cursor AI",
   "license": "MIT",
   "dependencies": {
     "commander": "^11.1.0",
@@ -27,7 +27,7 @@
     "puppeteer": "^21.7.0"
   },
   "devDependencies": {
-    "@types/node": "^20.11.0",
+    "@types/node": "^20.17.47",
     "typescript": "^5.3.3"
   },
   "engines": {
@@ -35,10 +35,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yourusername/wayback-screenshot.git"
+    "url": "git+https://github.com/b0bthcdrz/wayback-screenshot.git"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/wayback-screenshot/issues"
+    "url": "https://github.com/b0bthcdrz/wayback-screenshot/issues"
   },
-  "homepage": "https://github.com/yourusername/wayback-screenshot#readme"
+  "homepage": "https://github.com/b0bthcdrz/wayback-screenshot#readme"
 }
